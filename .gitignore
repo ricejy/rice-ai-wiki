@@ -1,0 +1,7 @@
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.trash/
+scripts/.env
+raw/telegram-export/
+*.stackdump
+.claude/settings.local.json
