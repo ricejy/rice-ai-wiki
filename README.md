@@ -22,7 +22,7 @@ Inspired by Karpathy's "second brain" idea — except the brain does its own rea
 
 **Two actors, fully decoupled via git:**
 
-1. **Telegram Bot** — runs on your machine, captures channel messages, commits and pushes raw markdown files to GitHub
+1. **Telegram Bot** — runs on your machine, captures channel messages, commits and pushes raw markdown files to GitHub. Retries failed pushes up to 3 times with exponential backoff, and DMs you on Telegram if it can't recover.
 2. **Scheduled Claude Agent** — runs daily in Anthropic's cloud, reads pending messages, produces structured wiki pages, pushes back
 
 You interact with the wiki through Obsidian (or any markdown editor). The LLM does all the writing.
@@ -103,9 +103,12 @@ Edit `scripts/.env`:
 ```
 TELEGRAM_BOT_TOKEN=<your token from @BotFather>
 TELEGRAM_CHANNEL_ID=<your channel ID in -100xxxxx format>
+TELEGRAM_ADMIN_CHAT_ID=<your personal chat ID for failure notifications>
 ```
 
 To get the channel ID: add the bot as an admin to your channel, send a message, then check `https://api.telegram.org/bot<TOKEN>/getUpdates`.
+
+To get your personal chat ID: forward any message to [@userinfobot](https://t.me/userinfobot) on Telegram. The admin chat ID is optional — if unset, the bot still retries pushes but skips the notification.
 
 ### 3. Run the bot
 

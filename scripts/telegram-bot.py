@@ -7,6 +7,7 @@ import os
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,6 +19,7 @@ load_dotenv()
 # Bot token and channel ID are set in the .env file. Was created by @BotFather on telegram itself.
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID = int(os.environ.get("TELEGRAM_CHANNEL_ID", "0"))
+ADMIN_CHAT_ID = int(os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "0"))
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = PROJECT_ROOT / "raw" / "telegram"
@@ -61,20 +63,55 @@ def extract_urls(message) -> list[str]:
             urls.append(entity.url)
     return urls
 
-# commits and pushes the new message file (and any assets) to origin.
-def git_commit_and_push(filepath: Path, filename: str) -> None:
-    """Commit the new message file (and any assets) and push to origin."""
+_push_failed = False
+
+def git_commit_and_push(filepath: Path, filename: str, bot=None) -> None:
+    cwd = str(PROJECT_ROOT)
+    global _push_failed
+
     try:
-        cwd = str(PROJECT_ROOT)
         subprocess.run(["git", "add", "raw/telegram/"], cwd=cwd, check=True, capture_output=True)
         subprocess.run(
             ["git", "commit", "-m", f"telegram: {filename}"],
             cwd=cwd, check=True, capture_output=True,
         )
-        subprocess.run(["git", "push"], cwd=cwd, check=True, capture_output=True)
-        logger.info(f"Pushed: {filename}")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Git push failed: {e.stderr.decode() if e.stderr else e}")
+        logger.error(f"Git commit failed: {e.stderr.decode() if e.stderr else e}")
+        return
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            subprocess.run(
+                ["git", "pull", "--rebase", "origin", "main"],
+                cwd=cwd, check=True, capture_output=True,
+            )
+            subprocess.run(["git", "push"], cwd=cwd, check=True, capture_output=True)
+            logger.info(f"Pushed: {filename}")
+            if _push_failed:
+                _push_failed = False
+                _notify_admin(bot, f"Git push recovered. Backlog cleared.")
+            return
+        except subprocess.CalledProcessError as e:
+            last_err = e.stderr.decode() if e.stderr else str(e)
+            logger.warning(f"Push attempt {attempt + 1}/3 failed: {last_err}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+
+    _push_failed = True
+    logger.error(f"Git push failed after 3 attempts: {last_err}")
+    _notify_admin(bot, f"Git push failed after 3 retries.\n\n{last_err}")
+
+
+def _notify_admin(bot, text: str) -> None:
+    if not bot or not ADMIN_CHAT_ID:
+        return
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"[ai-cooker bot] {text}"))
+    except RuntimeError:
+        asyncio.run(bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"[ai-cooker bot] {text}"))
 
 # core of this script. Handles incoming messages from the channel and saves them to the raw/telegram/ directory.
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -156,8 +193,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     filepath.write_text("\n".join(lines), encoding="utf-8")
     logger.info(f"Saved: {filename}")
 
-    # Auto-commit and push so the remote ingestion agent can pick it up
-    git_commit_and_push(filepath, filename)
+    git_commit_and_push(filepath, filename, bot=context.bot)
 
 
 if __name__ == "__main__":
